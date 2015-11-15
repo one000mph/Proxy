@@ -71,6 +71,7 @@ int main(int argc, char **argv)
     struct sockaddr_storage clientaddr; // enough space for any address
     char client_hostname[MAXLINE];
     char client_port[MAXLINE];
+    int id = 0;
 
     /* Socket and thread initiation code goes here */
     listenfd = Open_listenfd((int) atoi(argv[1]));
@@ -80,8 +81,16 @@ int main(int argc, char **argv)
         Getnameinfo((SA*) &clientaddr, clientlen, client_hostname, MAXLINE, client_port, MAXLINE, 0);
         printf("Connected to (%s, %s)\n", client_hostname, client_port);
 
-        // Do something
-        echo(connfd);
+        // Parse the request
+        arglist_t* arglist = Malloc(sizeof(arglist_t));
+        arglist->myid = id;
+        arglist->connfd = connfd;
+        arglist->clientaddr = *((struct sockaddr_in*) &clientaddr);
+        printf("%d %d\n", id, connfd);
+        // printf("%x\n", &(arglist->clientaddr));
+        process_request((void*) arglist);
+
+        id++;
 
         // Close(connfd);
     }
@@ -201,7 +210,30 @@ void *process_request(void *vargp)
      * close all appropriate fds and free appropriate memory,
      * especially on error paths!
      */
-    return NULL;
+     unsigned int new_len;
+     char* noHeader = substitute_re(request, request_len, "GET ", "", 0, 0, NULL, &new_len);
+     char* strippedRequest = substitute_re(noHeader, new_len, " HTTP\/1\..", "", 0, 0, NULL, NULL);
+     char* hostname = (char *)Malloc(MAXLINE);
+     char* pathname = (char *)Malloc(MAXLINE);
+     int* port = (int *)Malloc(sizeof(int*));;
+     if (parse_uri(strippedRequest, hostname, pathname, port) != 0) {
+         printf("Warning: parse_uri failed; error = %s\n", strerror(errno));
+     };
+     printf("%s %s %d\n", hostname, pathname, *port);
+
+     char* httpRequest = substitute_re(request, request_len, " HTTP\/1\..", "HTTP/1.0", 0, 0, NULL, NULL);
+     // forward reques to the server
+     // char* recbuf[MAXLINE];
+     int clientfd = Open_clientfd(hostname, *port);
+
+     Rio_readinitb(&rio, clientfd);
+     Rio_writen(clientfd, buf, strlen(httpRequest));
+     Rio_readlineb(&rio, buf, MAXLINE);
+     Fputs(buf, stdout);     // log things here
+     // cleanup
+     Free(request);
+
+     return NULL;
 }
 
 
