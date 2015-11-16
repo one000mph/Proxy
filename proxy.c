@@ -92,7 +92,6 @@ int main(int argc, char **argv)
 
         id++;
 
-        Close(connfd);
     }
     exit(0);
 }
@@ -142,7 +141,7 @@ void *process_request(void *vargp)
     connfd = arglist.connfd;         /* Put connfd and clientaddr in scalars for convenience */  
     clientaddr = arglist.clientaddr;
     /* See the man page on pthread_detach for why the following line is handy */
-    Pthread_detach(pthread_self());  /* Detach the thread */
+    //Pthread_detach(pthread_self());  /* Detach the thread */
     Free(vargp);                     /* Free up the arguments */ 
 
     /* 
@@ -230,18 +229,31 @@ void *process_request(void *vargp)
      Rio_writen(clientfd, buf, strlen(httpRequest));
 
      size_t lineLen;
+     size_t count = 0;
      while ((lineLen = Rio_readlineb(&rio, buf, MAXLINE)) > 0) {
         // get response
-        Fputs(buf, stdout);
+        // Fputs(buf, stdout);
         Rio_writen(connfd, buf, lineLen);
+        count++;
      }
-     
-     // log things here
+     if (count>0) {
+         // log things here
+         FILE* file = Fopen("proxy.log", "a");
+         char * log_entry = Malloc(100);
+         format_log_entry(log_entry, 100, &clientaddr, strippedRequest, MAXLINE);
+         printf("%s\n", log_entry);
+         fprintf(file, "%s\n", log_entry); //buffered
+         // fflush(file);
+         Fclose(file);
+     }
+
+
      
      // cleanup
+
      Free(request);
      Close(clientfd);
-     // Close(connfd);
+     Close(connfd);
 
      return NULL;
 }
