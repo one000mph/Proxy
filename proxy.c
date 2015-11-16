@@ -86,29 +86,12 @@ int main(int argc, char **argv)
         arglist->myid = id;
         arglist->connfd = connfd;
         arglist->clientaddr = *((struct sockaddr_in*) &clientaddr);
-        printf("%d %d\n", id, connfd);
-        // printf("%x\n", &(arglist->clientaddr));
         process_request((void*) arglist);
 
         id++;
 
     }
     exit(0);
-}
-
-
-// echo from book
-void echo(int connfd) {
-    size_t n;
-    char buf[MAXLINE];
-    rio_t rio;
-
-    Rio_readinitb(&rio, connfd);
-
-    while((n = Rio_readlineb(&rio, buf, MAXLINE)) != 0) {
-         printf("server received %zu bytes\n", n);
-         Rio_writen(connfd, buf, n);
-     }
 }
 
 /*
@@ -211,49 +194,54 @@ void *process_request(void *vargp)
      */
      unsigned int new_len;
      char* noHeader = substitute_re(request, request_len, "GET ", "", 0, 0, NULL, &new_len);
-     char* strippedRequest = substitute_re(noHeader, new_len, " HTTP\\/1\\..", "", 0, 0, NULL, NULL);
+     char* strippedRequest = substitute_re(noHeader, new_len, " HTTP\\/1\\..\r\n\r\n", "", 0, 0, NULL, NULL);
      char* hostname = (char *)Malloc(MAXLINE);
      char* pathname = (char *)Malloc(MAXLINE);
      int* port = (int *)Malloc(sizeof(int*));;
      if (parse_uri(strippedRequest, hostname, pathname, port) != 0) {
          printf("Warning: parse_uri failed; error = %s\n", strerror(errno));
      };
-     printf("%s %s %d\n", hostname, pathname, *port);
 
-     char* httpRequest = substitute_re(request, request_len, " HTTP\\/1\\..", "HTTP/1.0", 0, 0, NULL, NULL);
+     char* httpRequest = substitute_re(request, request_len, " HTTP\\/1\\..", " HTTP/1.0", 0, 0, NULL, NULL);
+     printf("Sending request: %s", httpRequest);
+     printf("stripped request: %s", strippedRequest);
      // forward reques to the server
-     int clientfd = Open_clientfd(hostname, *port);
-
-
-     Rio_readinitb(&rio, clientfd);
-     Rio_writen(clientfd, buf, strlen(httpRequest));
-
-     size_t lineLen;
-     size_t count = 0;
-     while ((lineLen = Rio_readlineb(&rio, buf, MAXLINE)) > 0) {
-        // get response
-        // Fputs(buf, stdout);
-        Rio_writen(connfd, buf, lineLen);
-        count++;
+    int clientfd;
+     if((clientfd = Open_clientfd(hostname, *port)) < 0) {
+        printf("%s\n", "could not open connection to client");
+        return NULL;
      }
-     if (count>0) {
+
+     // initialize buffer
+     Rio_readinitb(&rio, clientfd);
+     // write response to buffer
+     Rio_writen(clientfd, httpRequest, strlen(request));
+
+     ssize_t readData;
+     int responseLen = 0;
+     while ((readData = Rio_readnb(&rio, buf, MAXLINE)) > 0) {
+        // get response
+        responseLen += readData;
+        Rio_writen(connfd, buf, readData);
+     }
+     if (responseLen>0) {
          // log things here
          FILE* file = Fopen("proxy.log", "a");
          char * log_entry = Malloc(100);
          format_log_entry(log_entry, 100, &clientaddr, strippedRequest, MAXLINE);
-         printf("%s\n", log_entry);
+         // printf("LOG ENTRY: %s\n", log_entry);
          fprintf(file, "%s\n", log_entry); //buffered
-         // fflush(file);
+         Free(log_entry);
          Fclose(file);
      }
 
 
      
      // cleanup
-
      Free(request);
-     Close(clientfd);
      Close(connfd);
+     Close(clientfd);
+     
 
      return NULL;
 }
