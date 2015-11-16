@@ -92,7 +92,7 @@ int main(int argc, char **argv)
 
         id++;
 
-        // Close(connfd);
+        Close(connfd);
     }
     exit(0);
 }
@@ -212,7 +212,7 @@ void *process_request(void *vargp)
      */
      unsigned int new_len;
      char* noHeader = substitute_re(request, request_len, "GET ", "", 0, 0, NULL, &new_len);
-     char* strippedRequest = substitute_re(noHeader, new_len, " HTTP\/1\..", "", 0, 0, NULL, NULL);
+     char* strippedRequest = substitute_re(noHeader, new_len, " HTTP\\/1\\..", "", 0, 0, NULL, NULL);
      char* hostname = (char *)Malloc(MAXLINE);
      char* pathname = (char *)Malloc(MAXLINE);
      int* port = (int *)Malloc(sizeof(int*));;
@@ -221,17 +221,27 @@ void *process_request(void *vargp)
      };
      printf("%s %s %d\n", hostname, pathname, *port);
 
-     char* httpRequest = substitute_re(request, request_len, " HTTP\/1\..", "HTTP/1.0", 0, 0, NULL, NULL);
+     char* httpRequest = substitute_re(request, request_len, " HTTP\\/1\\..", "HTTP/1.0", 0, 0, NULL, NULL);
      // forward reques to the server
-     // char* recbuf[MAXLINE];
      int clientfd = Open_clientfd(hostname, *port);
+
 
      Rio_readinitb(&rio, clientfd);
      Rio_writen(clientfd, buf, strlen(httpRequest));
-     Rio_readlineb(&rio, buf, MAXLINE);
-     Fputs(buf, stdout);     // log things here
+
+     size_t lineLen;
+     while ((lineLen = Rio_readlineb(&rio, buf, MAXLINE)) > 0) {
+        // get response
+        Fputs(buf, stdout);
+        Rio_writen(connfd, buf, lineLen);
+     }
+     
+     // log things here
+     
      // cleanup
      Free(request);
+     Close(clientfd);
+     // Close(connfd);
 
      return NULL;
 }
