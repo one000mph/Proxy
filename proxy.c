@@ -203,7 +203,7 @@ void *process_request(void *vargp)
      };
 
      char* httpRequest = substitute_re(request, request_len, " HTTP\\/1\\..", " HTTP/1.0", 0, 0, NULL, NULL);
-     printf("Sending request: %s", httpRequest);
+     // printf("Sending request: %s", httpRequest);
      printf("stripped request: %s", strippedRequest);
      // forward reques to the server
     int clientfd;
@@ -227,9 +227,10 @@ void *process_request(void *vargp)
      if (responseLen>0) {
          // log things here
          FILE* file = Fopen("proxy.log", "a");
-         char * log_entry = Malloc(100);
+         printf("length of request%d\n ", (int)strlen(strippedRequest));
+         char * log_entry = Malloc(44+strlen(strippedRequest));
          format_log_entry(log_entry, 100, &clientaddr, strippedRequest, MAXLINE);
-         // printf("LOG ENTRY: %s\n", log_entry);
+         printf("LOG ENTRY: %s\n", log_entry);
          fprintf(file, "%s\n", log_entry); //buffered
          Free(log_entry);
          Fclose(file);
