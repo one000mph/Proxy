@@ -12,6 +12,7 @@
 
 #include "csapp.h"
 #include "strmanip.h"
+#include <pthread.h>
 
 /* The name of the proxy's log file */
 #define PROXY_LOG "proxy.log"
@@ -32,6 +33,7 @@ typedef struct {
 /*
  * Place global declarations here.
  */ 
+pthread_mutex_t mutex;
 
 /*
  * Place forward function declarations here.
@@ -44,7 +46,6 @@ void format_log_entry(char *logstring, int stringsize, struct sockaddr_in *socka
 // we wrote these methods below
 int Getnameinfo(const struct sockaddr *sa, socklen_t salen, char *host, socklen_t hostlen,
                        char *serv, socklen_t servlen, int flags);
-void echo(int connfd);
 
 /*
  * Handy macro to compare something with a constant prefix.  For example,
@@ -72,21 +73,25 @@ int main(int argc, char **argv)
     char client_hostname[MAXLINE];
     char client_port[MAXLINE];
     int id = 0;
+    pthread_t tid;
 
-    /* Socket and thread initiation code goes here */
+    /* Open listener socket */
     listenfd = Open_listenfd((int) atoi(argv[1]));
+
     while (1) {
         clientlen = sizeof(struct sockaddr_storage);
+
+        // Parse the request
         connfd = Accept(listenfd, (SA*)&clientaddr, &clientlen);
         Getnameinfo((SA*) &clientaddr, clientlen, client_hostname, MAXLINE, client_port, MAXLINE, 0);
         printf("Connected to (%s, %s)\n", client_hostname, client_port);
-
-        // Parse the request
         arglist_t* arglist = Malloc(sizeof(arglist_t));
         arglist->myid = id;
         arglist->connfd = connfd;
         arglist->clientaddr = *((struct sockaddr_in*) &clientaddr);
-        process_request((void*) arglist);
+
+        // Create thread to handle request
+        Pthread_create(&tid, NULL, process_request, (void*) arglist);
 
         id++;
 
@@ -112,19 +117,12 @@ void *process_request(void *vargp)
     int n;                          /* General counting variable */
     rio_t rio;                      /* Rio buffer for calls to buffered rio_readlineb routine */
     char buf[MAXLINE];              /* General I/O buffer */
-    /*
-     * Do some initial setup
-     *
-     * NOTE TO STUDENTS: the structure of this code implies some things
-     * about how main should invoke the thread.  It is up to you
-     * whether you write a main to match, or discard the code and
-     * design your own interface.
-     */
+    
     arglist = *((arglist_t *)vargp); /* Copy the arguments onto the stack */
     connfd = arglist.connfd;         /* Put connfd and clientaddr in scalars for convenience */  
     clientaddr = arglist.clientaddr;
     /* See the man page on pthread_detach for why the following line is handy */
-    //Pthread_detach(pthread_self());  /* Detach the thread */
+    Pthread_detach(pthread_self());  /* Detach the thread */
     Free(vargp);                     /* Free up the arguments */ 
 
     /* 
@@ -136,8 +134,11 @@ void *process_request(void *vargp)
     realloc_size = MAXLINE;
     request_len = 0;
     Rio_readinitb(&rio, connfd);
+
     while (1) {
+        // handle errors
         if ((n = Rio_readlineb_w(&rio, buf, MAXLINE)) <= 0) {
+
             printf("Thread %d: process_request: client issued a bad request (1).\n",
               arglist.myid);
             printf("Thread %d: process_request: partial request was %s\n",
@@ -181,17 +182,6 @@ void *process_request(void *vargp)
         return NULL;
     }
 
-    /*
-     * Most of your "real" code will go here.  You should first
-     * extract the URI from the request and parse it (using
-     * parse_uri).  Note that the extracted URI must be a proper C
-     * string (i.e., it has to end with a null byte).  You should also
-     * perform basic validity checks (e.g., check for HTTP/1.0 or
-     * HTTP/1.1), forward the request to the server, pass the response
-     * back to the client, log things, and clean up.  Be careful to
-     * close all appropriate fds and free appropriate memory,
-     * especially on error paths!
-     */
      unsigned int new_len;
      char* noHeader = substitute_re(request, request_len, "GET ", "", 0, 0, NULL, &new_len);
      char* strippedRequest = substitute_re(noHeader, new_len, " HTTP\\/1\\..\r\n\r\n", "", 0, 0, NULL, NULL);
@@ -203,7 +193,6 @@ void *process_request(void *vargp)
      };
 
      char* httpRequest = substitute_re(request, request_len, " HTTP\\/1\\..", " HTTP/1.0", 0, 0, NULL, NULL);
-     // printf("Sending request: %s", httpRequest);
      printf("stripped request: %s", strippedRequest);
      // forward reques to the server
     int clientfd;
@@ -220,20 +209,26 @@ void *process_request(void *vargp)
      ssize_t readData;
      int responseLen = 0;
      while ((readData = Rio_readnb(&rio, buf, MAXLINE)) > 0) {
-        // get response
         responseLen += readData;
         Rio_writen(connfd, buf, readData);
      }
+
      if (responseLen>0) {
-         // log things here
-         FILE* file = Fopen("proxy.log", "a");
-         printf("length of request%d\n ", (int)strlen(strippedRequest));
-         char * log_entry = Malloc(44+strlen(strippedRequest));
-         format_log_entry(log_entry, 100, &clientaddr, strippedRequest, MAXLINE);
+         /* Create log entry */
+         size_t entry_length = 44 + strlen(strippedRequest);
+         char * log_entry = Malloc(entry_length);
+         format_log_entry(log_entry, entry_length, &clientaddr, strippedRequest, MAXLINE);
          printf("LOG ENTRY: %s\n", log_entry);
+
+          /* Logfile is a shared resource, must be protected with a semaphore */
+         pthread_mutex_lock(&mutex);
+         FILE* file = Fopen("proxy.log", "a");
          fprintf(file, "%s\n", log_entry); //buffered
          Free(log_entry);
          Fclose(file);
+         pthread_mutex_unlock(&mutex);
+
+
      }
 
 
@@ -242,8 +237,7 @@ void *process_request(void *vargp)
      Free(request);
      Close(connfd);
      Close(clientfd);
-     
-
+     pthread_exit(0);
      return NULL;
 }
 
