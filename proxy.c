@@ -12,7 +12,6 @@
 
 #include "csapp.h"
 #include "strmanip.h"
-#include <pthread.h>
 
 /* The name of the proxy's log file */
 #define PROXY_LOG "proxy.log"
@@ -34,7 +33,7 @@ typedef struct {
  * Place global declarations here.
  */ 
 pthread_mutex_t mutex;
-
+sem_t semaphore;
 /*
  * Place forward function declarations here.
  */
@@ -46,6 +45,7 @@ void format_log_entry(char *logstring, int stringsize, struct sockaddr_in *socka
 // we wrote these methods below
 int Getnameinfo(const struct sockaddr *sa, socklen_t salen, char *host, socklen_t hostlen,
                        char *serv, socklen_t servlen, int flags);
+int Open_clientfd_ts(char *hostname, int port);
 
 /*
  * Handy macro to compare something with a constant prefix.  For example,
@@ -91,6 +91,7 @@ int main(int argc, char **argv)
         arglist->clientaddr = *((struct sockaddr_in*) &clientaddr);
 
         // Create thread to handle request
+        Sem_init(&semaphore, 0, 1);
         Pthread_create(&tid, NULL, process_request, (void*) arglist);
 
         id++;
@@ -181,31 +182,53 @@ void *process_request(void *vargp)
         free(request);
         return NULL;
     }
+     
+     /* begin our code */
+     // find len of first line
+     int count = 0;
+     while(request[count] != '\n') {
+         count++;
+     }
+     //extract first line
+     char* firstLine = (char*)Malloc(count);
+     memcpy(firstLine, &request[0], count-1);
+     firstLine[count] = '\0';
 
-     unsigned int new_len;
-     char* noHeader = substitute_re(request, request_len, "GET ", "", 0, 0, NULL, &new_len);
-     char* strippedRequest = substitute_re(noHeader, new_len, " HTTP\\/1\\..\r\n\r\n", "", 0, 0, NULL, NULL);
+     //Change to proper protocol
+     P(&semaphore);
+     char* httpRequest = substitute_re(request, request_len, " HTTP\\/1\\..", " HTTP/1.0", 0, 0, NULL, NULL);
+     V(&semaphore);
+     printf("httpRequest: %s\n", httpRequest);
+
+     // extract data from first line
+     char* get = Malloc(3);
+     char* url = Malloc(MAXLINE);
+     char* protocol = Malloc(8);
+     sscanf(firstLine, "%s %s %s", get, url, protocol);
+
+
+     // parse info from uri
      char* hostname = (char *)Malloc(MAXLINE);
      char* pathname = (char *)Malloc(MAXLINE);
      int* port = (int *)Malloc(sizeof(int*));;
-     if (parse_uri(strippedRequest, hostname, pathname, port) != 0) {
+     if (parse_uri(url, hostname, pathname, port) != 0) {
          printf("Warning: parse_uri failed; error = %s\n", strerror(errno));
      };
 
-     char* httpRequest = substitute_re(request, request_len, " HTTP\\/1\\..", " HTTP/1.0", 0, 0, NULL, NULL);
-     printf("stripped request: %s", strippedRequest);
-     // forward reques to the server
-    int clientfd;
-     if((clientfd = Open_clientfd(hostname, *port)) < 0) {
+     
+     
+     // forward request to the server
+     int clientfd;
+     if((clientfd = Open_clientfd_ts(hostname, *port)) < 0) {
         printf("%s\n", "could not open connection to client");
         return NULL;
      }
 
      // initialize buffer
      Rio_readinitb(&rio, clientfd);
+
      // write response to buffer
      Rio_writen(clientfd, httpRequest, strlen(request));
-
      ssize_t readData;
      int responseLen = 0;
      while ((readData = Rio_readnb(&rio, buf, MAXLINE)) > 0) {
@@ -215,12 +238,10 @@ void *process_request(void *vargp)
 
      if (responseLen>0) {
          /* Create log entry */
-         size_t entry_length = 44 + strlen(strippedRequest);
-         char * log_entry = Malloc(entry_length);
-         format_log_entry(log_entry, entry_length, &clientaddr, strippedRequest, MAXLINE);
-         printf("LOG ENTRY: %s\n", log_entry);
+         char * log_entry = Malloc(MAXLINE);
+         format_log_entry(log_entry, MAXLINE, &clientaddr, url, responseLen);
 
-          /* Logfile is a shared resource, must be protected with a semaphore */
+          /* Logfile is a shared resource, must be protected with a mutex */
          pthread_mutex_lock(&mutex);
          FILE* file = Fopen("proxy.log", "a");
          fprintf(file, "%s\n", log_entry); //buffered
@@ -230,11 +251,16 @@ void *process_request(void *vargp)
 
 
      }
-
-
-     
+   
      // cleanup
+     Free(firstLine);
+     Free(get);
+     Free(url);
+     Free(hostname);
+     Free(pathname);
+     Free(port);
      Free(request);
+
      Close(connfd);
      Close(clientfd);
      pthread_exit(0);
@@ -256,7 +282,17 @@ ssize_t Rio_readlineb_w(rio_t *rp, void *usrbuf, size_t maxlen)
         return 0;
     }
     return rc;
-} 
+}
+
+/* Thread safe open_clientfd with error handling
+*/
+int Open_clientfd_ts(char *hostname, int port) {
+    P(&semaphore);
+    int result = Open_clientfd(hostname, port);
+    V(&semaphore);
+    return result;
+    
+}
 
 /*
  * Getnameinfo- A wrapper for getnameinfo <sys/socket.h> that
