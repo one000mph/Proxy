@@ -34,6 +34,7 @@ typedef struct {
  */ 
 pthread_mutex_t mutex;
 sem_t semaphore;
+sem_t sem_fml;
 /*
  * Place forward function declarations here.
  */
@@ -93,6 +94,7 @@ int main(int argc, char **argv)
 
         // Create thread to handle request
         Sem_init(&semaphore, 0, 1);
+        Sem_init(&sem_fml, 0 ,1 );
         Pthread_create(&tid, NULL, process_request, (void*) arglist);
 
         id++;
@@ -196,9 +198,11 @@ void *process_request(void *vargp)
      firstLine[count] = '\0';
 
      //Change to proper protocol
-     // P(&semaphore);
-     char* httpRequest = substitute_re(request, request_len, " HTTP\\/1\\..", " HTTP/1.0", 0, 0, NULL, NULL);
-     // V(&semaphore);
+     P(&sem_fml);
+     char* httpRequest = substitute_re(request, request_len, " HTTP\\/1\\.1", " HTTP/1.0", 0, 0, NULL, NULL);
+     V(&sem_fml);
+
+
 
      // extract data from first line
      char* get = Malloc(3);
@@ -253,7 +257,7 @@ void *process_request(void *vargp)
      }
    
      // cleanup
-     Free(firstLine);
+     // Free(firstLine);
      Free(get);
      Free(url);
      Free(hostname);
