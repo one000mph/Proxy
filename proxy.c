@@ -45,6 +45,7 @@ void format_log_entry(char *logstring, int stringsize, struct sockaddr_in *socka
 // we wrote these methods below
 int Getnameinfo(const struct sockaddr *sa, socklen_t salen, char *host, socklen_t hostlen,
                        char *serv, socklen_t servlen, int flags);
+int open_clientfd_ts(char *hostname, int port);
 int Open_clientfd_ts(char *hostname, int port);
 
 /*
@@ -195,10 +196,9 @@ void *process_request(void *vargp)
      firstLine[count] = '\0';
 
      //Change to proper protocol
-     P(&semaphore);
+     // P(&semaphore);
      char* httpRequest = substitute_re(request, request_len, " HTTP\\/1\\..", " HTTP/1.0", 0, 0, NULL, NULL);
-     V(&semaphore);
-     printf("httpRequest: %s\n", httpRequest);
+     // V(&semaphore);
 
      // extract data from first line
      char* get = Malloc(3);
@@ -284,14 +284,49 @@ ssize_t Rio_readlineb_w(rio_t *rp, void *usrbuf, size_t maxlen)
     return rc;
 }
 
-/* Thread safe open_clientfd with error handling
-*/
-int Open_clientfd_ts(char *hostname, int port) {
+// A thread-safe version of open_clientfd in which we protect
+// calls to gethostbyname with semaphores
+int open_clientfd_ts(char *hostname, int port) 
+{
+    int clientfd;
+    struct hostent *hp;
+    struct sockaddr_in serveraddr;
+
+    if ((clientfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+        return -1; /* check errno for cause of error */
+
+    /* Fill in the server's IP address and port */
     P(&semaphore);
-    int result = Open_clientfd(hostname, port);
+    if ((hp = gethostbyname(hostname)) == NULL)
+        return -2; /* check h_errno for cause of error */
     V(&semaphore);
-    return result;
-    
+    bzero((char *) &serveraddr, sizeof(serveraddr));
+    serveraddr.sin_family = AF_INET;
+    bcopy((char *)hp->h_addr_list[0], 
+          (char *)&serveraddr.sin_addr.s_addr, hp->h_length);
+    serveraddr.sin_port = htons(port);
+
+    /* Establish a connection with the server */
+    if (connect(clientfd, (SA *) &serveraddr, sizeof(serveraddr)) < 0)
+        return -1;
+    return clientfd;
+}
+
+
+/*
+ * Copy of Open_clientfd to call our thread-safe version of open_clientfd
+ */
+int Open_clientfd_ts(char *hostname, int port) 
+{
+    int rc;
+
+    if ((rc = open_clientfd_ts(hostname, port)) < 0) {
+        if (rc == -1)
+            unix_error("Open_clientfd Unix error");
+        else        
+            dns_error("Open_clientfd DNS error");
+    }
+    return rc;
 }
 
 /*
